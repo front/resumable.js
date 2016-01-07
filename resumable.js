@@ -584,6 +584,8 @@
       $.retries = 0;
       $.pendingRetry = false;
       $.preprocessState = 0; // 0 = unprocessed, 1 = processing, 2 = finished
+      $.app = false;
+      $.ft = null;
 
       // Computed properties
       var chunkSize = $.getOpt('chunkSize');
@@ -669,7 +671,16 @@
         }
         // Done (either done, failed or retry)
         var doneHandler = function(e){
+          // Are we dealing with a response from FileTransfer obj?
+          if (e.responseCode) {
+            $.ft.status = e.responseCode;
+          }
+
           var status = $.status();
+          console.log('Handler status:', status);
+          console.log(JSON.stringify(e));
+          //return;
+
           if(status=='success'||status=='error') {
             $.callback(status, $.message());
             $.resumableObj.uploadNextChunk();
@@ -709,14 +720,23 @@
         });
 
         var app = document.URL.indexOf( 'http://' ) === -1 && document.URL.indexOf( 'https://' ) === -1;
+        app = true;
+        $.app = app;
         if ( app ) { //Running on phonegap
-            FileOptions = new FileUploadOptions();
-            TransferObject = new FileTransfer();
-            ServerURI = encodeURI($.getOpt('target'));
+            // Setup FileTransfer obj.
+            $.ft = {
+              status: null,
+              FileTransfer: null
+            };
+            var FileOptions = new FileUploadOptions();
+            $.ft.FileTransfer = new FileTransfer();
+            var ServerURI = encodeURI($.getOpt('target'));
+
             // PhoneGap application
             var queryParams = {'params':query};
             var fileURI = new FileEntry($.fileObj.file.name, $.fileObj.file.fullPath);
             fileURI = encodeURI(fileURI.toURL());
+            var file = $.fileObj.file;
             var filename = (file.name) ? file.name : fileURI.replace(/^.*[\\\/]/, '');
             // replace semicolon with dash
             filename = filename.replace(/%3A/, '-');
@@ -724,23 +744,25 @@
             FileOptions.fileKey = "file";
             FileOptions.fileName = filename; //file.path.substr(file.path.lastIndexOf('/') + 1);
             FileOptions.mimeType = file.type; // file.mime
-            FileOptions.chunkedMode = false;
+            FileOptions.chunkedMode = true;
             for(var o in queryParams) {
               if(queryParams.hasOwnProperty(o)) {
                 FileOptions[o] = queryParams[o];
               }
             }
-            file.size = file.size || 0;
 
-            TransferObject.upload(
-            fileURI, // URI of server we're sending to (HTTP... or HTTPS...)
-            ServerURI,
-            doneHandler, // success handler
-            doneHandler, // error handler
-            FileOptions, //Options
-            true,// trustAllHosts
-            $.startByte,
-            $.endByte);
+            //file.size = file.size || 0;
+
+            $.ft.FileTransfer.upload(
+              file.localURL, // URI of server we're sending to (HTTP... or HTTPS...)
+              ServerURI,
+              doneHandler, // success handler
+              doneHandler, // error handler
+              FileOptions, //Options
+              true,// trustAllHosts
+              $.startByte,
+              $.endByte
+            );
         } else {
           // Web page
           // Set up request and listen for event
@@ -758,7 +780,7 @@
           $.xhr.addEventListener('load', doneHandler, false);
           $.xhr.addEventListener('error', doneHandler, false);
           $.xhr.addEventListener('timeout', doneHandler, false);
-         
+
           var func   = ($.fileObj.file.slice ? 'slice' : ($.fileObj.file.mozSlice ? 'mozSlice' : ($.fileObj.file.webkitSlice ? 'webkitSlice' : 'slice'))),
           bytes  = $.fileObj.file[func]($.startByte,$.endByte),
           data   = null,
@@ -797,6 +819,8 @@
           $h.each(customHeaders, function(k,v) {
             $.xhr.setRequestHeader(k, v);
           });
+          console.debug('bytes', JSON.stringify(bytes));
+
           $.xhr.send(data);
         }
       };
@@ -806,13 +830,28 @@
         $.xhr = null;
       };
       $.status = function(){
+        console.log('get status');
         // Returns: 'pending', 'uploading', 'success', 'error'
         if($.pendingRetry) {
           // if pending retry then that's effectively the same as actively uploading,
           // there might just be a slight delay before the retry starts
           return('uploading');
+        } else if($.app) {
+          console.log('$.ft.status', $.ft.status);
+          if (!$.ft.status) {
+            return('uploading');
+          } else if ($.ft.status == 200 || $.ft.status == 201) {
+            return('success');
+          } else {
+            return('error');
+          }
+
+          $.abort();
+          return('error');
         } else if(!$.xhr) {
           return('pending');
+
+          //return('pending');
         } else if($.xhr.readyState<4) {
           // Status is really 'OPENED', 'HEADERS_RECEIVED' or 'LOADING' - meaning that stuff is happening
           return('uploading');
